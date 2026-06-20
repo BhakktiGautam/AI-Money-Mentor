@@ -27,7 +27,7 @@ from werkzeug.security import (
     generate_password_hash,
     check_password_hash
 )
-from models import db, Expense, Asset, Liability, BudgetLimit, BudgetAlert, PriceAlert, PriceAlertEvent, FinancialGoal, RecurringExpense, Portfolio, Account, Transaction, LedgerEntry
+
 from utils.portfolio_optimizer import PortfolioOptimizer
 from flask_mail import Mail, Message
 # Load environment variables from .env file (if present)
@@ -58,7 +58,7 @@ from utils.stock import get_stock_price, get_stock_dividends
 from utils.expense_track import calculate_expense, insights
 from utils.validation import ValidationError, validate_string, validate_float, validate_int, validate_history
 from utils.safety_engine import SafetyEngine
-
+from utils.rag_system import RAGSystem
 app = Flask(__name__)
 
 # ============================================
@@ -173,7 +173,7 @@ def process_recurring_expenses():
     today = date.today()
     
     try:
-        from models import RecurringExpense, Expense
+       from models import db, Expense, Asset, Liability, BudgetLimit, BudgetAlert, PriceAlert, PriceAlertEvent, FinancialGoal, RecurringExpense, Portfolio, Account, Transaction, LedgerEntry
         
         # Get all active recurring expenses due today
         due_expenses = RecurringExpense.query.filter(
@@ -298,6 +298,121 @@ atexit.register(lambda: scheduler.shutdown())
 # ============================================
 # ROUTES
 # ============================================
+# ---------------- RAG SYSTEM ----------------
+from utils.rag_system import RAGSystem
+
+# Initialize RAG system
+rag_system = RAGSystem()
+rag_system.set_client(client)
+
+@app.route('/rag-assistant')
+@login_required
+def rag_assistant_page():
+    """RAG Assistant Page"""
+    return render_template('rag_assistant.html', active_page='rag_assistant')
+
+@app.route('/api/rag/upload', methods=['POST'])
+@login_required
+def rag_upload():
+    """Upload and process a document"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'No file selected'}), 400
+        
+        # Save file temporarily
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
+            file.save(tmp.name)
+            tmp_path = tmp.name
+        
+        doc_name = request.form.get('doc_name', file.filename)
+        
+        # Process document
+        result = rag_system.process_document(
+            tmp_path,
+            metadata={'doc_name': doc_name, 'user_id': current_user.id}
+        )
+        
+        # Clean up temp file
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/rag/query', methods=['POST'])
+@login_required
+def rag_query():
+    """Query the RAG system"""
+    try:
+        data = request.json
+        question = data.get('question', '').strip()
+        
+        if not question:
+            return jsonify({'success': False, 'error': 'No question provided'}), 400
+        
+        if not client:
+            return jsonify({
+                'success': False,
+                'answer': 'AI client not configured. Please set up Groq API key.',
+                'sources': []
+            }), 503
+        
+        result = rag_system.query(question)
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/rag/documents', methods=['GET'])
+@login_required
+def rag_documents():
+    """Get list of uploaded documents"""
+    try:
+        docs = rag_system.get_documents()
+        return jsonify({
+            'success': True,
+            'documents': docs
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/rag/delete', methods=['POST'])
+@login_required
+def rag_delete():
+    """Delete a document"""
+    try:
+        data = request.json
+        doc_id = data.get('doc_id')
+        
+        if not doc_id:
+            return jsonify({'success': False, 'error': 'Document ID required'}), 400
+        
+        success = rag_system.delete_document(doc_id)
+        return jsonify({'success': success})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/rag/clear', methods=['POST'])
+@login_required
+def rag_clear():
+    """Clear all documents"""
+    try:
+        success = rag_system.clear_all()
+        return jsonify({'success': success})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 # ---------------- HOME ----------------
 @app.route("/register", methods=["POST"])
